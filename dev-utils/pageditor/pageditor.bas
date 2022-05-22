@@ -1,7 +1,7 @@
 ' pageditor.bas
 ' creates pages
 #include once "windows.bi"
-#include once "win\commdlg.bi"
+#include once "win/commdlg.bi"
 
 #define RGBA_R( c ) ( CUInt( c ) Shr 16 And 255 )
 #define RGBA_G( c ) ( CUInt( c ) Shr  8 And 255 )
@@ -41,6 +41,7 @@ Dim Shared As Any Ptr curCell
 Dim Shared As Any Ptr gridCell
 Dim Shared As String pageName
 Dim Shared As Integer curInk, curPaper
+Dim Shared As Integer graph
 
 Dim Shared As Integer speccyColours (7) = { _
 	&HFF000000, _
@@ -65,7 +66,7 @@ Sub usage ()
 	Puts "Pageditor v0.2 20220522 by The Mojon Twins"
 	Puts "$ pageditor.exe page=NNN"
 	Puts "  Will create new if page NNN does not exist, edit it otherwise."
-	Puts "$ pageditor.exe nopage [alltokens]"
+	Puts "$ pageditor.exe nopage"
 	Puts "  To use as a BASIC exporter. alltokens produces better strings but may be unlistable"
 End Sub
 
@@ -313,7 +314,11 @@ Sub MyShowCursor (x As Integer, y As Integer)
 		drawCell (x, y)
 
 		If flipFlop = 1 Then
-			Put (16*x, 16*y), whiteCell, Xor
+			If graph Then
+				Put (x*16, y*16), fullFont (7, 0, Asc ("G") - 32), Pset
+			Else
+				Put (16*x, 16*y), whiteCell, Xor
+			EndIf
 		End If
 	End If
 End Sub
@@ -385,6 +390,18 @@ Function getOptimizedLine (y As Integer, x0 As Integer, y0 As Integer) As String
 		paper = fullScreen (y, x).paper
 		charNum = fullScreen (y, x).charNum
 
+		' Attempt to reduce changes
+		If paper = ink And (charNum=32 Or charNum=&H80 Or charNum=&H8F) Then
+			If paper = curInk  Then
+				paper = curPaper
+				charNum = &H8F
+			Else
+				ink = curInk
+			End If
+		End If
+
+		If charNum=&H80 Then charNum=32
+
 		' Swap to save changes?
 		If (ink = curPaper Or paper = curInk) And charNum > 127 Then
 			Swap ink, paper
@@ -413,6 +430,33 @@ Function getOptimizedLine (y As Integer, x0 As Integer, y0 As Integer) As String
 	Next x
 
 	Return res
+End Function
+
+Function graphMode (k As String) As Integer
+	Dim ascOut As Integer
+	
+	ascOut = 32
+
+	Select Case k
+		case "8": ascOut = &H80
+		case "1": ascOut = &H81
+		case "2": ascOut = &H82
+		case "3": ascOut = &H83
+		case "4": ascOut = &H84
+		case "5": ascOut = &H85
+		case "6": ascOut = &H86
+		case "7": ascOut = &H87
+		case "/": ascOut = &H88
+		case "&": ascOut = &H89
+		case "%": ascOut = &H8A
+		case "$": ascOut = &H8B
+		case "·", "#", Chr(250): ascOut = &H8C
+		case """": ascOut = &H8D
+		case "!": ascOut = &H8E
+		case "(": ascOut = &H8F
+	End Select
+
+	Return ascOut
 End Function
 
 Dim As Integer editX, editY
@@ -488,6 +532,7 @@ editX = 0: editY = 0
 mainC1 = 7: MainC2 = 0
 lastT = Timer
 flipFlop = 0
+graph = 0
 
 mode = MODE_TEXT
 oldmode = &HFF
@@ -519,12 +564,19 @@ Do
 	If mode = MODE_EDITING Then
 		MyShowCursor editX, editY
 		k = Inkey
-		If k <> "" Then 
+		If k <> "" Then
+			'Puts k & ", " & Len(k) & ", " & Asc (k)
 			kc = Asc (k)
-			If kc >= 32 And kc < 128 Then
+			If (kc >= 32 And kc < 128) Or (graph And Len(k) = 1) Then
 				fullScreen (editY, editX).ink = mainC1
 				fullScreen (editY, editX).paper = mainC2
-				fullScreen (editY, editX).charNum = Asc (k)
+
+				If (graph) Then
+					kc = graphMode (k)
+				End If
+					
+				fullScreen (editY, editX).charNum = kc
+				
 				drawCell editX, editY
 				drawCellGrid editX, editY
 				editX = editX + 1
@@ -553,6 +605,8 @@ Do
 				editX = editX - 1
 			End If
 		End If
+
+		If k = Chr (9) Then graph = Not graph
 
 		If Len (k) > 1 Then
 			x = editX: y = editY
@@ -598,7 +652,8 @@ Do
 
 				If exporting Then
 					If x <> expDx Or y <> expDy Then
-						Line (16*expOx, 16*expOy)-(16*expDx+16, 16*expDy+16), RGBA (63, 63, 63, 255), B
+						fullScreenBlit
+						overlayGrid
 						Line (16*expOx, 16*expOy)-(16*x+16, 16*y+16), speccyColours(2), B
 						expDx = x: expDy = y
 					End If
@@ -694,6 +749,8 @@ Do
 	End If
 
 	If Button_Event (buttonExport) Then
+		drawCell editX, editY
+		drawCellGrid editX, editY
 		mode = MODE_EXPORTING
 		exporting = 0
 	End If
