@@ -37,3 +37,47 @@ End Function
 Function withAlpha (alpha As Integer, colour As Integer) As uInteger
 	withAlpha = (colour And &H00FFFFFF) Or (alpha Shl 24)
 End Function
+
+Sub sanitizeSlashes (ByRef spec As String)
+	Dim As Integer i
+	For i = 1 To Len (spec)
+		If Mid (spec, i, 1) = Chr (92) Then Mid (spec, i, 1) = "/"
+	Next
+End Sub
+
+Function absoluteToRelative (fileSpec As String, refSpec As String) As String
+	Dim As Integer i
+	Dim As Integer fi
+	Dim As Integer numBacks
+	Dim As String res
+
+	sanitizeSlashes fileSpec
+	sanitizeSlashes refSpec
+
+	If Right (refSpec, 1) <> "/" Then refSpec = refSpec & "/"
+
+	' Check how much of fileSpec and refSpec are the same
+	For i = 1 To Len (fileSpec)
+		If i > Len (refSpec) Then Exit For
+		If Mid (fileSpec, i, 1) <> Mid (refSpec, i, 1) Then Exit For
+	Next i
+
+	fi = i
+
+	numBacks = 0
+	If fi <= Len (refSpec) Then
+		For i = fi To Len (refSpec)
+			If Mid (refSpec, i, 1) = "/" Then numBacks = numBacks + 1
+		Next i
+	End If
+
+	res = ""
+	For i = 1 To numBacks
+		res = res & "../"
+	Next i
+
+	res = res & Right (fileSpec, Len (fileSpec) - fi + 1)
+
+	Return res
+End Function
+

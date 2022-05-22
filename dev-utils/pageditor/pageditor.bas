@@ -1,5 +1,7 @@
 ' pageditor.bas
 ' creates pages
+#include once "windows.bi"
+#include once "win\commdlg.bi"
 
 #define RGBA_R( c ) ( CUInt( c ) Shr 16 And 255 )
 #define RGBA_G( c ) ( CUInt( c ) Shr  8 And 255 )
@@ -37,6 +39,8 @@ Dim Shared As Integer flipFlop
 Dim Shared As Any Ptr whiteCell
 Dim Shared As Any Ptr curCell
 Dim Shared As Any Ptr gridCell
+Dim Shared As String pageName
+Dim Shared As Integer curInk, curPaper
 
 Dim Shared As Integer speccyColours (7) = { _
 	&HFF000000, _
@@ -61,8 +65,8 @@ Sub usage ()
 	Puts "Pageditor v0.2 20220522 by The Mojon Twins"
 	Puts "$ pageditor.exe page=NNN"
 	Puts "  Will create new if page NNN does not exist, edit it otherwise."
-	Puts "$ pageditor.exe nopage"
-	Puts "  To use as a BASIC exporter"
+	Puts "$ pageditor.exe nopage [alltokens]"
+	Puts "  To use as a BASIC exporter. alltokens produces better strings but may be unlistable"
 End Sub
 
 Sub loadBinFontAndPaint (img As Any Ptr, yOf As Integer, c1 As Integer, c2 As Integer)
@@ -302,7 +306,7 @@ Function dialogYesNo (caption As String) As Integer
 	Return res
 End Function
 
-Sub ShowCursor (x As Integer, y As Integer)
+Sub MyShowCursor (x As Integer, y As Integer)
 	If Timer - lastT >= 0.5 Then
 		flipFlop = 1 - flipFlop
 		lastT = Timer
@@ -317,10 +321,10 @@ End Sub
 Sub editOrNew 
 	Dim As Integer fIn
 	fIn = FreeFile
-	Open sclpGetValue ("page") & ".ttx" For Binary As #fIn
+	Open pageName & ".ttx" For Binary As #fIn
 	If Lof (fIn) = 0 Then
 		Close #fIn
-		Kill sclpGetValue ("page") & ".ttx"
+		Kill pageName & ".ttx"
 		initFullScreen
 	Else
 		loadPage fIn
@@ -328,14 +332,99 @@ Sub editOrNew
 	End If
 End Sub
 
+Function filebrowserExport ( Byval hWnd As HWND ) As String 
+	Dim ofn As OPENFILENAME
+	Dim filename As Zstring * (MAX_PATH + 1)
+	Dim title As Zstring * 32 => "Exporting de Gijón"
+
+	Dim myCurDir As String
+	myCurDir = Curdir
+
+	Dim initialdir As Zstring * 256 => myCurDir
+
+	With ofn
+	.lStructSize       = Sizeof(OPENFILENAME)
+	.hwndOwner         = hWnd
+	.hInstance         = GetModuleHandle(NULL)
+	.lpstrFilter       = Strptr(!"All Files, (*.*)\0*.*\0\0")
+	.lpstrCustomFilter = NULL
+	.nMaxCustFilter    = 0
+	.nFilterIndex      = 1
+	.lpstrFile         = @filename
+	.nMaxFile          = Sizeof(filename)
+	.lpstrFileTitle    = NULL
+	.nMaxFileTitle     = 0
+	.lpstrInitialDir   = @initialdir
+	.lpstrTitle        = @title
+	.Flags             = OFN_EXPLORER Or OFN_PATHMUSTEXIST
+	.nFileOffset       = 0
+	.nFileExtension    = 0
+	.lpstrDefExt       = NULL
+	.lCustData         = 0
+	.lpfnHook          = NULL
+	.lpTemplateName    = NULL
+	End With
+
+	If (GetOpenFileName(@ofn) = FALSE) Then Return ""
+
+	filename = absoluteToRelative (filename, myCurDir)
+	ChDir myCurDir
+
+	Return filename
+End Function
+
+Function getOptimizedLine (y As Integer, x0 As Integer, y0 As Integer) As String
+	Dim As Integer ink, paper, charNum
+	Dim As Integer x
+	Dim As String res
+
+	res = ""
+
+	For x = x0 To y0
+		ink = fullScreen (y, x).ink
+		paper = fullScreen (y, x).paper
+		charNum = fullScreen (y, x).charNum
+
+		' Swap to save changes?
+		If (ink = curPaper Or paper = curInk) And charNum > 127 Then
+			Swap ink, paper
+			charNum = 128 + 15 - (charNum - 128)
+		End If
+
+		' Ink change
+		If ink <> curInk Then 
+			res = res & "{INK " & ink & "}"
+		End If
+
+		' Paper change
+		If paper <> curPaper Then 
+			res = res & "{PAPER " & paper & "}"
+		End If 
+
+		' Char
+		If charNum >= 32 And charNum < 128 Then 
+			res = res & Chr (charNum)
+		Else
+		 	res = res & "{" & Ucase (Hex (charNum, 2)) & "}"
+		End If
+
+		curInk = ink
+		curPaper = paper 
+	Next x
+
+	Return res
+End Function
+
 Dim As Integer editX, editY
 Dim As Integer mainC1, mainC2
 Dim As Integer mode, oldmode
 Dim As Integer mx, my, mbtn, pbtn, x, y, i, kc, initX
 Dim As Integer oldx, oldy
 Dim As Integer fOut
-Dim As String k, pageName
-Dim As String mandatory (0) = { "page" }
+Dim As String k
+Dim As String filename
+Dim As Integer expOx, expOy, expDx, expDy, exporting, alltokens
+Dim As String outputString
 
 ' Buttons
 Dim As Button buttonSave
@@ -346,6 +435,9 @@ Dim As Button buttonExit
 Dim As Button buttonDraw
 Dim As Button buttonText
 Dim As Button buttonExport
+
+' Windows shit
+Dim As HWND hwnd
 
 sclpParseAttrs
 
@@ -359,14 +451,16 @@ If pageName = "" Then
 	End If
 End If
 
-Print "pageName = [" & pageName & "], " & Val (pageName) & " " & Len (pageName)
-
 If Len (pageName) <> 3 Or ((Val (pageName) < 100 Or Val (pageName) > 999) And Val (pageName) <> 0) Then
 	usage
 	End
 End If
 
+alltokens = (sclpGetValue ("alltokens") <> "")
+
 OpenWindow 512, 400, "Mojon Twins' PagEditor"
+ScreenControl fb.GET_WINDOW_HANDLE,cast(integer,hwnd)
+SetWindowPos(hWnd,HWND_TOPMOST,0,0,0,0,SWP_NOSIZE or SWP_NOMOVE)
 
 buttonSave = Button_New (8, 384 - 8, 48, 16, "Save")
 buttonRevert = Button_New (8+48, 384 - 8, 64, 16, "Revert")
@@ -375,7 +469,7 @@ buttonExit = Button_New (8+48+64+56, 384 - 8, 48, 16, "Exit")
 
 buttonDraw = Button_New (8, 384-16-8, 48, 16, "Draw")
 buttonText = Button_New (8+48, 384-16-8, 48, 16, "Text")
-buttonText = Button_New (8+48+48, 384-16-8, 40, 16, "Exp")
+buttonExport = Button_New (8+48+48, 384-16-8, 40, 16, "Exp")
 
 whiteCell = ImageCreate (16, 16, RGB(255,255,255))
 curCell = ImageCreate (16, 16)
@@ -422,11 +516,8 @@ Do
 		oldmode = mode
 	End If
 
-	If mode = MODE_EXPORTING Then
-		' Cut out a rectangle and save as BASIC
-
-	ElseIf mode = MODE_EDITING Then
-		ShowCursor editX, editY
+	If mode = MODE_EDITING Then
+		MyShowCursor editX, editY
 		k = Inkey
 		If k <> "" Then 
 			kc = Asc (k)
@@ -500,7 +591,66 @@ Do
 
 		' Inside editing area?
 		If mx >= 0 And mx < 512 And my > 0 And my < 352 Then
-			If mode = MODE_TEXT Then
+			
+			If mode = MODE_EXPORTING Then
+				x = mx \ 16
+				y = my \ 16
+
+				If exporting Then
+					If x <> expDx Or y <> expDy Then
+						Line (16*expOx, 16*expOy)-(16*expDx+16, 16*expDy+16), RGBA (63, 63, 63, 255), B
+						Line (16*expOx, 16*expOy)-(16*x+16, 16*y+16), speccyColours(2), B
+						expDx = x: expDy = y
+					End If
+				End If
+
+				If pbtn And 1 Then
+					If exporting Then
+						' Save
+						filename = filebrowserExport (hwnd)
+						exporting = 0
+						fullScreenBlit
+						overlayGrid
+
+						outputString = ""
+						curInk = -1: curPaper = -1
+							
+						' Full width mode or rect mode?
+						If expDx+1 - expOx = 32 Then 
+							puts ("full width exporter")
+							For y = expOy To expDy 
+								outputString = outputString & getOptimizedLine (y, 0, 31)
+							Next y
+						Else
+							'read charNum, attr from fullScreen
+							 puts ("Rectangle exporter")
+							 For y = expOy To expDy
+							 	If alltokens Then
+							 		outputString=outputString & "{16}" & Chr(34) & "+CHR$(yy+" & (y-expOy) & ")+CHR$(xx)+" & Chr(34)
+							 	Else
+								 	outputString=outputString & Chr(34) & "+CHR$(22)+CHR$(yy+" & (y-expOy) & ")+CHR$(xx)+" & Chr(34)
+								EndIf
+							 	outputString = outputString & getOptimizedLine (y, expOx, expDx)
+							 Next y
+						End If
+
+						outputString = "PRINT " & Chr(34) & outputString & Chr(34)
+						
+						fOut = FreeFile
+						Open filename For Output As #fOut
+						Print #fOut, outputString
+						Close fOut
+					Else 
+						expOx = x 
+						expOy = y
+						expDx = x
+						expDy = y
+						Line (16*expOx, 16*expOy)-(16*expDx+16, 16*expDy+16), speccyColours(2), B
+						exporting = -1
+					End If
+				End If
+
+			ElseIf mode = MODE_TEXT Then
 				x = mx \ 16
 				y = my \ 16
 
@@ -538,17 +688,20 @@ Do
 	End If
 
 	If Button_Event (buttonText) Then
+		drawCell editX, editY
+		drawCellGrid editX, editY
 		mode = MODE_TEXT
 	End If
 
 	If Button_Event (buttonExport) Then
 		mode = MODE_EXPORTING
+		exporting = 0
 	End If
 
 	If Button_Event (buttonSave) Then
-		Kill sclpGetValue ("page") & ".ttx"
+		Kill pageName & ".ttx"
 		fOut = FreeFile
-		Open sclpGetValue ("page") & ".ttx" For Binary As #fOut
+		Open pageName & ".ttx" For Binary As #fOut
 		savePage fOut
 		Close #fOut
 	End If
