@@ -392,12 +392,25 @@ Function getOptimizedLine (y As Integer, x0 As Integer, y0 As Integer) As String
 
 		' Attempt to reduce changes
 		If paper = ink And (charNum=32 Or charNum=&H80 Or charNum=&H8F) Then
-			If paper = curInk  Then
-				paper = curPaper
-				charNum = &H8F
-			Else
-				ink = curInk
+			'If paper = curInk  Then
+			''	paper = curPaper
+			''	charNum = &H8F
+			'Else
+			''	ink = curInk
+			'End If
+
+			' Different approach
+			' 80/20 means "use paper" whereas 8F means "use ink"
+			If charNum = &H8F Then
+				If ink <> curInk Then 
+					ink = curInk 
+					charNum = 32
+				ElseIf paper <> curPaper Then 
+					paper = curPaper 
+					charNum = &H8F 
+				End If 
 			End If
+
 		End If
 
 		If charNum=&H80 Then charNum=32
